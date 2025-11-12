@@ -41,6 +41,12 @@ const Auth = () => {
   const defaultTab = searchParams.get("tab") === "signup" ? "signup" : "signin";
   const redirectTarget = searchParams.get("redirect") || "/upload";
 
+  // site URL for email redirects (set in env; falls back to current origin)
+  const SITE_URL =
+    import.meta.env.VITE_SITE_URL && String(import.meta.env.VITE_SITE_URL).trim().length > 0
+      ? String(import.meta.env.VITE_SITE_URL)
+      : window.location.origin;
+
   // form state
   const [loading, setLoading] = useState(false);
   const [initialChecking, setInitialChecking] = useState(true);
@@ -85,17 +91,41 @@ const Auth = () => {
     [navigate, redirectTarget]
   );
 
-  // If already authenticated on visit, route accordingly
+  // Handle magic-link/callback on this page and also route if already authenticated
   useEffect(() => {
     let cancelled = false;
+
     (async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (cancelled) return;
-      if (session) {
-        await routePostAuth();
+      // If the URL contains an auth code or access token, exchange it for a session
+      const href = window.location.href;
+      const url = new URL(href);
+      const hasCode = !!url.searchParams.get("code");
+      const hasAccessTokenHash = href.includes("#access_token=");
+
+      if (hasCode || hasAccessTokenHash) {
+        const { error } = await supabase.auth.exchangeCodeForSession(href);
+        if (!cancelled) {
+          if (error) {
+            toast.error(error.message || "Authentication link is invalid or has expired");
+            setInitialChecking(false);
+          } else {
+            await routePostAuth();
+            setInitialChecking(false);
+          }
+        }
+        return;
       }
-      setInitialChecking(false);
+
+      // Otherwise, if already signed in, route normally
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!cancelled) {
+        if (session) {
+          await routePostAuth();
+        }
+        setInitialChecking(false);
+      }
     })();
+
     return () => {
       cancelled = true;
     };
@@ -138,9 +168,8 @@ const Auth = () => {
         email,
         password,
         options: {
-          emailRedirectTo: `${window.location.origin}/auth?redirect=${encodeURIComponent(
-            redirectTarget
-          )}`
+          // Send magic/confirm link to deployed domain (or env-specified), back to this /auth page
+          emailRedirectTo: `${SITE_URL}/auth?redirect=${encodeURIComponent(redirectTarget)}`
         }
       });
       if (error) throw error;
