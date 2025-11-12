@@ -31,6 +31,19 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { AlertTriangle } from "lucide-react";
 
 type Sex = "Male" | "Female" | "Other" | "Prefer not to say";
 
@@ -145,17 +158,17 @@ const Profile = () => {
         const displayUrl = storedUrl ? withBuster(storedUrl) : "";
         setProfile({
           id: data.id,
-            email: data.email ?? userEmail,
-            full_name: data.full_name ?? "",
-            age: data.age ?? undefined,
-            sex: data.sex ?? undefined,
-            phone: data.phone ?? "",
-            skin_type: data.skin_type ?? undefined,
-            allergies: data.allergies ?? "",
-            notes: data.notes ?? "",
-            avatar_url: displayUrl,
-            created_at: data.created_at,
-            updated_at: data.updated_at,
+          email: data.email ?? userEmail,
+          full_name: data.full_name ?? "",
+          age: data.age ?? undefined,
+          sex: data.sex ?? undefined,
+          phone: data.phone ?? "",
+          skin_type: data.skin_type ?? undefined,
+          allergies: data.allergies ?? "",
+          notes: data.notes ?? "",
+          avatar_url: displayUrl,
+          created_at: data.created_at,
+          updated_at: data.updated_at,
         });
 
         if (displayUrl) {
@@ -237,31 +250,12 @@ const Profile = () => {
         .upload(filePath, file, { upsert: true, contentType: file.type });
 
       if (uploadError) {
-        if (String(uploadError.message || "").toLowerCase().includes("bucket")) {
-          toast.error(`Bucket "${AVATAR_BUCKET}" not found or inaccessible.`);
-        } else {
-          toast.error(uploadError.message || "Failed to upload photo");
-        }
+        toast.error(uploadError.message || "Failed to upload photo");
         throw uploadError;
       }
 
       const { data: pub } = supabase.storage.from(AVATAR_BUCKET).getPublicUrl(filePath);
-      let baseUrl = pub.publicUrl;
-
-      try {
-        const head = await fetch(baseUrl, { method: "HEAD" });
-        if (!head.ok) {
-          const { data: signed } = await supabase.storage
-            .from(AVATAR_BUCKET)
-            .createSignedUrl(filePath, 60 * 60 * 24 * 7);
-          if (signed?.signedUrl) baseUrl = signed.signedUrl;
-        }
-      } catch {
-        const { data: signed } = await supabase.storage
-          .from(AVATAR_BUCKET)
-          .createSignedUrl(filePath, 60 * 60 * 24 * 7);
-        if (signed?.signedUrl) baseUrl = signed.signedUrl;
-      }
+      const baseUrl = pub.publicUrl;
 
       const sb: any = supabase;
       const { error: upErr } = await sb
@@ -269,7 +263,7 @@ const Profile = () => {
         .upsert({
           id: userId,
           email: userEmail,
-          avatar_url: baseUrl.split("?")[0],
+          avatar_url: baseUrl,
           updated_at: new Date().toISOString(),
         })
         .eq("id", userId);
@@ -283,9 +277,7 @@ const Profile = () => {
       toast.success("Profile picture updated!");
     } catch (err: any) {
       console.error("Upload avatar failed:", err);
-      if (!String(err?.message || "").toLowerCase().includes("bucket")) {
-        toast.error(err?.message || "Failed to upload profile picture");
-      }
+      toast.error(err?.message || "Failed to upload profile picture");
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -315,6 +307,32 @@ const Profile = () => {
       setUploading(false);
     }
   };
+
+  async function deleteAccount() {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return navigate("/auth");
+      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/delete-account`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${session.access_token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ confirm: true }),
+      });
+      if (!res.ok) {
+        const msg = await res.text();
+        throw new Error(msg || "Delete failed");
+      }
+      await supabase.auth.signOut();
+      localStorage.removeItem("avatar_url");
+      toast.success("Your account was deleted.");
+      navigate("/", { replace: true });
+    } catch (err: any) {
+      console.error("Delete account failed:", err);
+      toast.error(err.message || "Failed to delete account");
+    }
+  }
 
   if (loading) {
     return (
@@ -373,7 +391,7 @@ const Profile = () => {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={handleAvatarClick}
+                    onClick={() => fileInputRef.current?.click()}
                     disabled={uploading}
                   >
                     {uploading ? (
@@ -603,13 +621,32 @@ const Profile = () => {
                   Permanently delete your account and all associated data
                 </p>
               </div>
-              <Button
-                variant="destructive"
-                onClick={() => toast.error("Account deletion feature coming soon")}
-              >
-                Delete Account
-              </Button>
+
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button variant="destructive">Delete Account</Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Delete your account?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      This will permanently delete your account, profile, and report history. This action cannot be undone.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction onClick={deleteAccount}>Delete</AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
             </div>
+
+            <Alert className="border-warning bg-warning/10">
+              <AlertTriangle className="h-4 w-4 text-warning" />
+              <AlertDescription className="text-xs">
+                When deleted, your data cannot be recovered. You will be signed out automatically.
+              </AlertDescription>
+            </Alert>
           </CardContent>
         </Card>
       </div>

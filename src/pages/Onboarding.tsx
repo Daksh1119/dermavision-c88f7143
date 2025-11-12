@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import AppLayout from "@/components/AppLayout";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
@@ -13,7 +13,6 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { Loader2, UploadCloud, Trash2 } from "lucide-react";
 
 type SkinType = "normal" | "dry" | "oily" | "combination" | "sensitive";
 type Sex = "Male" | "Female" | "Other" | "Prefer not to say";
@@ -31,20 +30,16 @@ interface ProfileRow {
   avatar_url?: string | null;
 }
 
-const AVATAR_BUCKET = "avatars";
-
 export default function Onboarding() {
   const navigate = useNavigate();
-  const location = useLocation();
-  const redirectTo = new URLSearchParams(location.search).get("redirect") || "/upload";
+  const [params] = useSearchParams();
+  const redirectTo = useMemo(() => params.get("redirect") || "/upload", [params]);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const fileRef = useRef<HTMLInputElement | null>(null);
 
   const [userId, setUserId] = useState("");
-  const [email, setEmail] = useState("");
+  const [userEmail, setUserEmail] = useState("");
 
   const [form, setForm] = useState<ProfileRow>({
     id: "",
@@ -64,10 +59,9 @@ export default function Onboarding() {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) { navigate("/auth"); return; }
       setUserId(session.user.id);
-      setEmail(session.user.email || "");
+      setUserEmail(session.user.email || "");
       setForm(f => ({ ...f, id: session.user.id, email: session.user.email || "" }));
 
-      // Cast supabase to any to avoid TS "never" errors when no generated DB types are present
       const sb: any = supabase;
       const { data, error } = await sb
         .from("profiles")
@@ -108,8 +102,8 @@ export default function Onboarding() {
 
   function validate(): string | null {
     if (!form.full_name || form.full_name.trim().length < 2) return "Enter full name.";
-    if (typeof form.age !== "number" || Number.isNaN(form.age) || form.age < 1 || form.age > 120) return "Enter valid age.";
-    if (!form.phone || form.phone.trim().length < 6) return "Enter valid phone.";
+    if (typeof form.age !== "number" || Number.isNaN(form.age) || form.age < 1 || form.age > 120) return "Enter a valid age.";
+    if (!form.phone || form.phone.trim().length < 6) return "Enter a valid phone.";
     if (!form.skin_type) return "Select skin type.";
     return null;
   }
@@ -121,9 +115,10 @@ export default function Onboarding() {
     if (msg) { toast.error(msg); return; }
     setSaving(true);
     try {
-      const payload = {
+      const payload: ProfileRow = {
         id: userId,
-        email: email || null, // satisfy NOT NULL if enforced; otherwise nullable is ok
+        // FIX: persist email reliably (use session email if missing in form)
+        email: form.email || userEmail || null,
         full_name: form.full_name?.trim() || null,
         age: form.age ?? null,
         sex: form.sex ?? null,
@@ -132,15 +127,12 @@ export default function Onboarding() {
         allergies: form.allergies?.trim() || null,
         notes: form.notes?.trim() || null,
         avatar_url: form.avatar_url || null,
-        updated_at: new Date().toISOString(),
       };
 
-      // Cast supabase to any to fix TS generic mismatch without generated types
       const sb: any = supabase;
       const { error } = await sb
         .from("profiles")
-        .upsert(payload)
-        .eq("id", userId);
+        .upsert(payload, { onConflict: "id" });
       if (error) throw error;
 
       toast.success("Profile saved.");
@@ -150,36 +142,6 @@ export default function Onboarding() {
     } finally {
       setSaving(false);
     }
-  }
-
-  async function onAvatarUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file || !userId) return;
-    setUploading(true);
-    try {
-      const ext = file.name.split(".").pop();
-      const path = `${userId}/avatar_${Date.now()}.${ext}`;
-      const { error: upErr } = await supabase.storage
-        .from(AVATAR_BUCKET)
-        .upload(path, file, { upsert: true, contentType: file.type });
-      if (upErr) throw upErr;
-
-      const {
-        data: { publicUrl },
-      } = supabase.storage.from(AVATAR_BUCKET).getPublicUrl(path);
-
-      setForm(f => ({ ...f, avatar_url: publicUrl }));
-      toast.success("Photo uploaded.");
-    } catch (err: any) {
-      toast.error(err.message || "Failed to upload photo");
-    } finally {
-      setUploading(false);
-      if (fileRef.current) fileRef.current.value = "";
-    }
-  }
-
-  function removeAvatar() {
-    setForm(f => ({ ...f, avatar_url: "" }));
   }
 
   if (loading) {
@@ -203,7 +165,7 @@ export default function Onboarding() {
         <Card className="medical-card">
           <CardHeader>
             <CardTitle>Required details</CardTitle>
-            <CardDescription>Your email is {email}. You can edit these later in Profile Settings.</CardDescription>
+            <CardDescription>Your email is {userEmail}. You can edit these later in Profile Settings.</CardDescription>
           </CardHeader>
           <CardContent>
             <form onSubmit={onSubmit} className="space-y-5">
@@ -296,56 +258,12 @@ export default function Onboarding() {
                 />
               </div>
 
-              <div className="space-y-2">
-                <Label>Profile Photo (optional)</Label>
-                <div className="flex gap-2">
-                  <input
-                    ref={fileRef}
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={onAvatarUpload}
-                  />
-                  <Button type="button" variant="outline" onClick={() => fileRef.current?.click()} disabled={uploading}>
-                    {uploading ? (
-                      <>
-                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        Uploading...
-                      </>
-                    ) : (
-                      <>
-                        <UploadCloud className="h-4 w-4 mr-2" />
-                        Upload Photo
-                      </>
-                    )}
-                  </Button>
-                  {form.avatar_url ? (
-                    <Button type="button" variant="ghost" onClick={removeAvatar} disabled={uploading}>
-                      <Trash2 className="h-4 w-4 mr-2" />
-                      Remove
-                    </Button>
-                  ) : null}
-                </div>
-                {form.avatar_url && (
-                  <div className="text-xs text-muted-foreground break-all">
-                    Saved URL: {form.avatar_url}
-                  </div>
-                )}
-              </div>
-
               <Button
                 type="submit"
                 className="w-full bg-accent hover:bg-accent/90"
                 disabled={saving}
               >
-                {saving ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Saving...
-                  </>
-                ) : (
-                  "Save & Continue"
-                )}
+                {saving ? "Saving…" : "Save & Continue"}
               </Button>
             </form>
           </CardContent>

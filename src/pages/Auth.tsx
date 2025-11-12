@@ -56,6 +56,34 @@ const Auth = () => {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
 
+  // Ensure a profiles row exists for the current user (id/email) without overwriting details
+  const ensureProfileRow = useCallback(async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    try {
+      const sb: any = supabase;
+      const { data: existing } = await sb
+        .from("profiles")
+        .select("id")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      if (!existing) {
+        const { error: insErr } = await sb
+          .from("profiles")
+          .insert({
+            id: user.id,
+            email: user.email || null,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          });
+        if (insErr) throw insErr;
+      }
+    } catch (e) {
+      console.warn("ensureProfileRow failed:", e);
+    }
+  }, []);
+
   /**
    * After any successful auth, decide where to send user:
    *  - If profile complete -> redirectTarget
@@ -66,6 +94,9 @@ const Auth = () => {
       try {
         const { data: { session } } = await supabase.auth.getSession();
         if (!session) return;
+
+        // Make sure a profile row exists for this user
+        await ensureProfileRow();
 
         const userId = session.user.id;
         const { data, error } = await (supabase as any)
@@ -89,7 +120,7 @@ const Auth = () => {
         navigate(`/onboarding?redirect=${encodeURIComponent(redirectTarget)}`, { replace: true });
       }
     },
-    [navigate, redirectTarget]
+    [navigate, redirectTarget, ensureProfileRow]
   );
 
   // Handle magic-link/callback on this page and also route if already authenticated
@@ -142,6 +173,7 @@ const Auth = () => {
       });
       if (error) throw error;
 
+      await ensureProfileRow();
       toast.success("Welcome back!");
       await routePostAuth();
     } catch (error: any) {
@@ -174,6 +206,9 @@ const Auth = () => {
         }
       });
       if (error) throw error;
+
+      // Pre-create the profile row so onboarding never starts with a missing row
+      await ensureProfileRow();
 
       if (data.session) {
         // Immediate session (e.g. email confirmation disabled)
