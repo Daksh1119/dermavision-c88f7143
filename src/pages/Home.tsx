@@ -27,19 +27,10 @@ interface Diagnosis {
   created_at: string;
   top_condition: string | null;
   top_confidence: number | null;
-  malignant_probability: number | null;
-  risk_level: "low" | "moderate" | "high" | null;
 }
 
 const formatPercent = (v?: number | null, digits = 1) =>
   v === null || v === undefined ? "—" : `${(v * 100).toFixed(digits)}%`;
-
-const riskColor = (risk?: string | null) =>
-  risk === "high"
-    ? "text-red-600"
-    : risk === "moderate"
-    ? "text-amber-600"
-    : "text-green-600";
 
 function displayCondition(label?: string | null): string {
   if (!label) return "Not available";
@@ -79,7 +70,7 @@ const Home = () => {
       const sb: any = supabase;
       const { data, error } = await sb
         .from("diagnoses")
-        .select("id, created_at, top_condition, top_confidence, malignant_probability, risk_level")
+        .select("id, created_at, top_condition, top_confidence")
         .eq("user_id", userId)
         .order("created_at", { ascending: false })
         .limit(1);
@@ -140,18 +131,6 @@ const Home = () => {
                       <Badge variant="outline" className="text-xs">
                         {new Date(recent.created_at).toLocaleDateString()}
                       </Badge>
-                      <Badge
-                        variant={
-                          recent.risk_level === "high"
-                            ? "destructive"
-                            : recent.risk_level === "moderate"
-                            ? "secondary"
-                            : "default"
-                        }
-                        className="capitalize"
-                      >
-                        {recent.risk_level} risk
-                      </Badge>
                     </div>
                     <div className="grid sm:grid-cols-2 gap-4">
                       <div className="space-y-1">
@@ -164,12 +143,6 @@ const Home = () => {
                         <div className="text-xs text-muted-foreground">Confidence</div>
                         <div className="font-semibold">
                           {formatPercent(recent.top_confidence)}
-                        </div>
-                      </div>
-                      <div className="space-y-1">
-                        <div className="text-xs text-muted-foreground">Malignant Probability</div>
-                        <div className={`font-semibold ${riskColor(recent.risk_level)}`}>
-                          {formatPercent(recent.malignant_probability)}
                         </div>
                       </div>
                       <div className="space-y-1">
@@ -265,7 +238,7 @@ const Home = () => {
                   <div>
                     <div className="font-medium">Condition Coverage</div>
                     <p className="text-xs text-muted-foreground">
-                      Broad set of common dermatology conditions with probability estimates where available.
+                      Broad set of common dermatology conditions with confidence estimates.
                     </p>
                   </div>
                 </div>
@@ -286,7 +259,7 @@ const Home = () => {
               </CardContent>
             </Card>
 
-            {/* Account & Navigation (trimmed to essentials) */}
+            {/* Account & Navigation */}
             <Card className="medical-card">
               <CardHeader className="pb-3">
                 <CardTitle>Account & Navigation</CardTitle>

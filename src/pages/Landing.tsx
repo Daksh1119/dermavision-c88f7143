@@ -259,8 +259,8 @@ const Landing = () => {
                 <div className="font-medium">Broad coverage</div>
               </div>
               <div className="medical-card p-4">
-                <div className="text-xs text-muted-foreground">Risk Assessment</div>
-                <div className="font-medium">Probability cues when available</div>
+                <div className="text-xs text-muted-foreground">Confidence</div>
+                <div className="font-medium">Top‑N probabilities</div>
               </div>
               <div className="medical-card p-4">
                 <div className="text-xs text-muted-foreground">Report</div>
@@ -294,7 +294,7 @@ const Landing = () => {
                 <div className="text-xs text-muted-foreground">Top condition</div>
                 <div className="font-semibold mt-1">Shown prominently</div>
                 <p className="text-xs text-muted-foreground mt-2">
-                  Most likely condition with concise risk cue.
+                  Most likely condition shown clearly.
                 </p>
               </div>
               <div className="rounded-lg border p-4 bg-card/60">
