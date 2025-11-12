@@ -1,4 +1,6 @@
+# -------------------------
 # Logs
+# -------------------------
 logs
 *.log
 npm-debug.log*
@@ -7,18 +9,84 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
+# -------------------------
+# Node / JS build artifacts
+# -------------------------
+node_modules/
+dist/
+dist-ssr/
+build/
+.vite/
+.nyc_output/
+coverage/
+
+# Local overrides (never commit)
 *.local
 
-# Editor directories and files
+# -------------------------
+# Editors / OS
+# -------------------------
 .vscode/*
 !.vscode/extensions.json
-.idea
+.idea/
 .DS_Store
+Thumbs.db
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
+
+# -------------------------
+# Environment files
+# -------------------------
+# Keep real env files out of git; provide .env.example instead
+.env
+.env.*
+!.env.example
+.envrc
+
+# -------------------------
+# Python (ml-service) artifacts
+ml-service/
+# -------------------------
+# Virtual environments
+venv/
+.venv/
+env/
+ml-service/venv/
+
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# Build/distribution
+*.egg-info/
+.eggs/
+*.egg
+pip-wheel-metadata/
+
+# Service-local envs/logs
+ml-service/.env
+ml-service/*.log
+
+# -------------------------
+# Sub-project ignores
+# -------------------------
+# If api/ has its own node install
+api/node_modules/
+
+# Supabase transient files (if generated locally)
+supabase/.temp/
+supabase/functions/.netlify/
+
+# -------------------------
+# Generated reports/exports (optional)
+# -------------------------
+reports/*.pdf
+*.pdfml-service/

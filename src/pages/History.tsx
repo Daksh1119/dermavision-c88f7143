@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,86 +14,114 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell,
+  Legend,
+} from "recharts";
+import { getConditionName } from "@/data/conditionMap"; // map internal labels
 
-interface Report {
+type RiskLevel = "low" | "moderate" | "high";
+
+interface DiagnosisRow {
   id: string;
-  date: string;
-  topCondition: string;
-  confidence: number;
-  riskLevel: string;
+  created_at: string;
+  top_condition: string;
+  top_confidence: number;
+  risk_level: RiskLevel;
+  top_predictions: Array<{ label_name: string; confidence: number }>;
+  malignant_probability: number;
+  malignant_flag: boolean;
+  model_version?: string | null;
+}
+
+const COLORS: Record<string, string> = {
+  Low: "#8BA38A",
+  Moderate: "#F59E0B",
+  High: "#EF4444",
+};
+
+const toDisplayRisk = (r: RiskLevel) =>
+  r === "low" ? "Low" : r === "moderate" ? "Moderate" : "High";
+
+function displayCondition(label: string): string {
+  const mapped = getConditionName(label) || label;
+  if (/^class[_\- ]?\d+$/i.test(mapped)) return "Unlabeled internal class";
+  return mapped;
 }
 
 const History = () => {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
-  const [reports, setReports] = useState<Report[]>([]);
+  const [reports, setReports] = useState<
+    { id: string; date: string; topCondition: string; confidence: number; riskLevel: "Low" | "Moderate" | "High" }[]
+  >([]);
+
   const [filterRisk, setFilterRisk] = useState("all");
   const [filterDate, setFilterDate] = useState("all");
 
   useEffect(() => {
-    const checkAuth = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
+    const load = async () => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
       if (!session) {
         navigate("/auth");
         return;
       }
+      try {
+        const sb = supabase as any;
+        const { data, error } = await sb
+          .from("diagnoses")
+          .select("id, created_at, top_condition, top_confidence, risk_level")
+          .order("created_at", { ascending: false });
+        if (error) throw error;
+        const rows: DiagnosisRow[] = (data ?? []) as DiagnosisRow[];
 
-      // Mock data for demonstration
-      // In production, this would fetch from the database
-      setReports([
-        {
-          id: "rep-001",
-          date: "2025-01-15",
-          topCondition: "Actinic Keratosis",
-          confidence: 78,
-          riskLevel: "Low"
-        },
-        {
-          id: "rep-002",
-          date: "2025-01-10",
-          topCondition: "Melanoma",
-          confidence: 65,
-          riskLevel: "High"
-        },
-        {
-          id: "rep-003",
-          date: "2025-01-05",
-          topCondition: "Seborrheic Keratosis",
-          confidence: 82,
-          riskLevel: "Low"
-        },
-        {
-          id: "rep-004",
-          date: "2024-12-28",
-          topCondition: "Basal Cell Carcinoma",
-          confidence: 71,
-          riskLevel: "Moderate"
-        },
-      ]);
-      
-      setLoading(false);
+        const uiReports = rows.map((r) => ({
+          id: r.id,
+          date: r.created_at,
+          topCondition: displayCondition(r.top_condition),
+          confidence: Math.round((r.top_confidence ?? 0) * 100),
+          riskLevel: toDisplayRisk(r.risk_level) as "Low" | "Moderate" | "High",
+        }));
+        setReports(uiReports);
+      } catch (err: any) {
+        console.error("Failed to load history:", err);
+        toast.error("Failed to load history");
+        setReports([]);
+      } finally {
+        setLoading(false);
+      }
     };
-    
-    checkAuth();
+    load();
   }, [navigate]);
 
-  const filteredReports = reports.filter(report => {
-    if (filterRisk !== "all" && report.riskLevel !== filterRisk) return false;
+  const filteredReports = useMemo(() => {
+    const now = new Date();
+    let fromDate: Date | null = null;
     if (filterDate === "week") {
-      const weekAgo = new Date();
-      weekAgo.setDate(weekAgo.getDate() - 7);
-      return new Date(report.date) >= weekAgo;
+      fromDate = new Date(now);
+      fromDate.setDate(now.getDate() - 7);
+    } else if (filterDate === "month") {
+      fromDate = new Date(now);
+      fromDate.setMonth(now.getMonth() - 1);
     }
-    if (filterDate === "month") {
-      const monthAgo = new Date();
-      monthAgo.setMonth(monthAgo.getMonth() - 1);
-      return new Date(report.date) >= monthAgo;
-    }
-    return true;
-  });
+    return reports.filter((report) => {
+      if (filterRisk !== "all" && report.riskLevel !== filterRisk) return false;
+      if (fromDate && new Date(report.date) < fromDate) return false;
+      return true;
+    });
+  }, [reports, filterRisk, filterDate]);
 
-  // Chart data
   const conditionCounts = filteredReports.reduce((acc, report) => {
     acc[report.topCondition] = (acc[report.topCondition] || 0) + 1;
     return acc;
@@ -101,7 +129,7 @@ const History = () => {
 
   const barChartData = Object.entries(conditionCounts).map(([name, value]) => ({
     name: name.length > 15 ? name.substring(0, 15) + "..." : name,
-    count: value
+    count: value,
   }));
 
   const riskCounts = filteredReports.reduce((acc, report) => {
@@ -111,14 +139,8 @@ const History = () => {
 
   const pieChartData = Object.entries(riskCounts).map(([name, value]) => ({
     name,
-    value
+    value,
   }));
-
-  const COLORS = {
-    'Low': '#8BA38A',
-    'Moderate': '#F59E0B',
-    'High': '#EF4444'
-  };
 
   if (loading) {
     return (
@@ -130,14 +152,17 @@ const History = () => {
     );
   }
 
+  const totalReports = reports.length;
+  const highCount = reports.filter((r) => r.riskLevel === "High").length;
+  const moderateCount = reports.filter((r) => r.riskLevel === "Moderate").length;
+  const lowCount = reports.filter((r) => r.riskLevel === "Low").length;
+
   return (
     <AppLayout>
       <div className="medical-container py-8 max-w-7xl">
         <div className="mb-8 animate-fade-in">
           <h1 className="text-3xl font-bold mb-2">Reports History</h1>
-          <p className="text-muted-foreground">
-            View and analyze your past diagnostic reports
-          </p>
+          <p className="text-muted-foreground">View and analyze your past diagnostic reports</p>
         </div>
 
         <div className="grid lg:grid-cols-4 gap-4 mb-6 animate-fade-in">
@@ -148,7 +173,7 @@ const History = () => {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-3xl font-bold">{reports.length}</div>
+              <div className="text-3xl font-bold">{totalReports}</div>
             </CardContent>
           </Card>
           <Card className="medical-card">
@@ -158,9 +183,7 @@ const History = () => {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-3xl font-bold text-destructive">
-                {reports.filter(r => r.riskLevel === "High").length}
-              </div>
+              <div className="text-3xl font-bold text-destructive">{highCount}</div>
             </CardContent>
           </Card>
           <Card className="medical-card">
@@ -170,9 +193,7 @@ const History = () => {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-3xl font-bold text-warning">
-                {reports.filter(r => r.riskLevel === "Moderate").length}
-              </div>
+              <div className="text-3xl font-bold text-warning">{moderateCount}</div>
             </CardContent>
           </Card>
           <Card className="medical-card">
@@ -182,9 +203,7 @@ const History = () => {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-3xl font-bold text-success">
-                {reports.filter(r => r.riskLevel === "Low").length}
-              </div>
+              <div className="text-3xl font-bold text-success">{lowCount}</div>
             </CardContent>
           </Card>
         </div>
@@ -200,7 +219,7 @@ const History = () => {
                 <BarChart data={barChartData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
                   <XAxis dataKey="name" tick={{ fontSize: 12 }} />
-                  <YAxis />
+                  <YAxis allowDecimals={false} />
                   <Tooltip />
                   <Bar dataKey="count" fill="#4D9DE0" radius={[8, 8, 0, 0]} />
                 </BarChart>
@@ -286,11 +305,15 @@ const History = () => {
                     style={{ animationDelay: `${idx * 50}ms` }}
                   >
                     <div className="flex items-center gap-4">
-                      <div className={`h-12 w-12 rounded-full flex items-center justify-center ${
-                        report.riskLevel === "High" ? "bg-destructive/10" :
-                        report.riskLevel === "Moderate" ? "bg-warning/10" :
-                        "bg-success/10"
-                      }`}>
+                      <div
+                        className={`h-12 w-12 rounded-full flex items-center justify-center ${
+                          report.riskLevel === "High"
+                            ? "bg-destructive/10"
+                            : report.riskLevel === "Moderate"
+                            ? "bg-warning/10"
+                            : "bg-success/10"
+                        }`}
+                      >
                         {report.riskLevel === "High" ? (
                           <AlertTriangle className="h-6 w-6 text-destructive" />
                         ) : (
@@ -310,11 +333,15 @@ const History = () => {
                       </div>
                     </div>
                     <div className="flex items-center gap-3">
-                      <Badge variant={
-                        report.riskLevel === "High" ? "destructive" :
-                        report.riskLevel === "Moderate" ? "default" :
-                        "secondary"
-                      }>
+                      <Badge
+                        variant={
+                          report.riskLevel === "High"
+                            ? "destructive"
+                            : report.riskLevel === "Moderate"
+                            ? "default"
+                            : "secondary"
+                        }
+                      >
                         {report.riskLevel} Risk
                       </Badge>
                       <Button variant="ghost" size="sm">

@@ -1,36 +1,50 @@
+import { Suspense } from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-import Landing from "./pages/Landing";
-import Auth from "./pages/Auth";
-import Upload from "./pages/Upload";
-import Form from "./pages/Form";
-import Report from "./pages/Report";
-import History from "./pages/History";
-import Profile from "./pages/Profile";
-import NotFound from "./pages/NotFound";
+import { BrowserRouter } from "react-router-dom";
+import AppRoutes from "@/routes/AppRoutes";
 
-const queryClient = new QueryClient();
+/**
+ * Central application shell.
+ * - Provides React Query client
+ * - Global tooltips & toasters
+ * - BrowserRouter wrapping the extracted AppRoutes
+ * - Suspense fallback for any lazy‑loaded routes/components
+ *
+ * If you later add route guards (e.g. ProfileGuard, AuthGuard),
+ * they should wrap <AppRoutes /> here or individual Route groups inside AppRoutes.
+ */
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      // Adjust according to your API reliability
+      refetchOnWindowFocus: false,
+      retry: 1,
+    },
+    mutations: {
+      retry: 0,
+    },
+  },
+});
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
-    <TooltipProvider>
+    <TooltipProvider delayDuration={200}>
       <Toaster />
       <Sonner />
       <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Landing />} />
-          <Route path="/auth" element={<Auth />} />
-          <Route path="/upload" element={<Upload />} />
-          <Route path="/form" element={<Form />} />
-          <Route path="/report/:id" element={<Report />} />
-          <Route path="/history" element={<History />} />
-          <Route path="/profile" element={<Profile />} />
-          {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
-          <Route path="*" element={<NotFound />} />
-        </Routes>
+        <Suspense
+          fallback={
+            <div className="flex items-center justify-center h-screen">
+              <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary" />
+            </div>
+          }
+        >
+          <AppRoutes />
+        </Suspense>
       </BrowserRouter>
     </TooltipProvider>
   </QueryClientProvider>
