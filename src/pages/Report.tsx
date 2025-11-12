@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import AppLayout from "@/components/AppLayout";
 import jsPDF from "jspdf";
-import autoTable from "jspdf-autotable";
+import autoTable, { type Color } from "jspdf-autotable";
 
 import { DiseaseInfoCard } from "@/components/disease/DiseaseInfoCard";
 import { useDiseaseInsights } from "@/hooks/useDiseaseInsights";
@@ -66,6 +66,13 @@ const interpretConfidence = (c: number) => {
   if (c >= 0.3) return "Moderate AI confidence.";
   return "Low AI confidence. Clinical evaluation essential.";
 };
+
+// Brand colors for PDF styling (typed to jsPDF-AutoTable Color)
+const BRAND_BLUE: Color = [14, 165, 233]; // #0EA5E9
+const BRAND_TEXT_DARK_RGB: [number, number, number] = [15, 23, 42]; // #0F172A
+const TEXT_BODY_RGB: [number, number, number] = [17, 24, 39]; // #111827
+const LINE_GRAY: Color = [226, 232, 240]; // #E2E8F0
+const ZEBRA: Color = [248, 250, 252]; // #F8FAFC
 
 // --------------------- Main Component --------------------------
 const Report = () => {
@@ -198,13 +205,13 @@ const Report = () => {
         .from("diagnoses")
         .insert({
           user_id: user.id,
-            top_condition: payload.top1_label,
-            top_confidence: payload.top1_confidence,
-            top_predictions: payload.top_predictions,
-            malignant_probability: payload.malignant_probability,
-            malignant_flag: payload.malignant_flag,
-            risk_level,
-            model_version: payload.model_version ?? "ai-engine",
+          top_condition: payload.top1_label,
+          top_confidence: payload.top1_confidence,
+          top_predictions: payload.top_predictions,
+          malignant_probability: payload.malignant_probability,
+          malignant_flag: payload.malignant_flag,
+          risk_level,
+          model_version: payload.model_version ?? "ai-engine",
         })
         .select()
         .single();
@@ -332,29 +339,51 @@ Please ensure:
     }
 
     const doc = new jsPDF("p", "pt", "a4");
+    const pageWidth = doc.internal.pageSize.getWidth();
     const left = 40;
     let y = 50;
     const gap = 16;
 
+    // Brand header bar
+    doc.setFillColor(BRAND_BLUE[0], BRAND_BLUE[1], BRAND_BLUE[2]);
+    doc.rect(0, 0, pageWidth, 50, "F");
+    doc.setTextColor(255, 255, 255);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(16);
+    doc.text("DermaVision — Clinical Skin Assessment", left, 32);
+
+    // Reset to dark text for content
+    doc.setTextColor(BRAND_TEXT_DARK_RGB[0], BRAND_TEXT_DARK_RGB[1], BRAND_TEXT_DARK_RGB[2]);
+    y = 70;
+
     const h1 = (t: string) => {
-      doc.setFont("helvetica", "bold"); doc.setFontSize(16); doc.text(t, left, y); y += 22;
+      doc.setTextColor(BRAND_TEXT_DARK_RGB[0], BRAND_TEXT_DARK_RGB[1], BRAND_TEXT_DARK_RGB[2]);
+      doc.setFont("helvetica", "bold"); doc.setFontSize(14); doc.text(t, left, y);
+      // underline rule
+      doc.setDrawColor(BRAND_BLUE[0], BRAND_BLUE[1], BRAND_BLUE[2]);
+      doc.setLineWidth(1);
+      doc.line(left, y + 4, left + 230, y + 4);
+      y += 22;
     };
     const h2 = (t: string) => {
+      doc.setTextColor(BRAND_TEXT_DARK_RGB[0], BRAND_TEXT_DARK_RGB[1], BRAND_TEXT_DARK_RGB[2]);
       doc.setFont("helvetica", "bold"); doc.setFontSize(12); doc.text(t, left, y); y += 18;
     };
     const p = (t: string) => {
+      doc.setTextColor(TEXT_BODY_RGB[0], TEXT_BODY_RGB[1], TEXT_BODY_RGB[2]);
       doc.setFont("helvetica", "normal"); doc.setFontSize(10);
       const lines = doc.splitTextToSize(t, 520);
       lines.forEach((l: string) => { doc.text(l, left, y); y += 12; });
       y += 4;
     };
 
-    h1("DermaVision - Short Clinical Summary");
+    // Meta line
     doc.setFontSize(9);
+    doc.setTextColor(100, 116, 139); // slate-500
     doc.text(`Report ID: ${savedId ?? id ?? "new"}    Date: ${generatedDate.toLocaleString()}`, left, y);
     y += gap;
 
-    h2("Patient");
+    h1("Patient");
     autoTable(doc, {
       startY: y,
       theme: "grid",
@@ -364,16 +393,27 @@ Please ensure:
         ["Age", profile?.age ? String(profile.age) : "Not provided"],
         ["Allergies", profile?.allergies || "None reported"],
       ],
-      styles: { fontSize: 9 },
-      headStyles: { fillColor: [240, 240, 240] },
+      styles: {
+        fontSize: 9,
+        cellPadding: 6,
+        textColor: TEXT_BODY_RGB as Color,
+        lineColor: LINE_GRAY,
+      },
+      headStyles: {
+        fillColor: BRAND_BLUE,
+        textColor: [255, 255, 255],
+        fontStyle: "bold",
+      },
       columnStyles: { 0: { cellWidth: 120 } },
     });
     y = (doc as any).lastAutoTable.finalY + 14;
 
-    h2("Assessment Summary");
+    h1("Assessment Summary");
     const topName = topDisplay;
+    doc.setTextColor(BRAND_TEXT_DARK_RGB[0], BRAND_TEXT_DARK_RGB[1], BRAND_TEXT_DARK_RGB[2]);
     doc.setFont("helvetica", "bold"); doc.setFontSize(12); doc.text(`Top Condition: ${topName}`, left, y); y += 16;
     doc.setFont("helvetica", "normal"); doc.setFontSize(10);
+    doc.setTextColor(TEXT_BODY_RGB[0], TEXT_BODY_RGB[1], TEXT_BODY_RGB[2]);
     doc.text(
       `Risk indicator: ${formatPercent(malignantRisk.probability, 1)} (${decideRiskLevel(
         malignantRisk.probability
@@ -393,12 +433,26 @@ Please ensure:
       theme: "striped",
       head: [["Condition", "Confidence", "Interpretation"]],
       body: topList,
-      styles: { fontSize: 9 },
-      headStyles: { fillColor: [220, 240, 255] },
+      styles: {
+        fontSize: 9,
+        cellPadding: 6,
+        textColor: TEXT_BODY_RGB as Color,
+      },
+      headStyles: {
+        fillColor: BRAND_BLUE,
+        textColor: [255, 255, 255],
+        fontStyle: "bold",
+      },
+      alternateRowStyles: { fillColor: ZEBRA },
+      columnStyles: {
+        0: { cellWidth: 130 },
+        1: { cellWidth: 85, halign: "left" },
+        2: { cellWidth: "auto" },
+      },
     });
     y = (doc as any).lastAutoTable.finalY + 14;
 
-    h2("Capture");
+    h1("Capture");
     autoTable(doc, {
       startY: y,
       theme: "grid",
@@ -407,21 +461,37 @@ Please ensure:
         ["Image file", imageMeta?.filename || "N/A"],
         ["Timestamp", imageMeta?.capturedAt || generatedDate.toLocaleString()],
       ],
-      styles: { fontSize: 9 },
-      headStyles: { fillColor: [240, 240, 240] },
+      styles: {
+        fontSize: 9,
+        cellPadding: 6,
+        textColor: TEXT_BODY_RGB as Color,
+        lineColor: LINE_GRAY,
+      },
+      headStyles: {
+        fillColor: BRAND_BLUE,
+        textColor: [255, 255, 255],
+        fontStyle: "bold",
+      },
       columnStyles: { 0: { cellWidth: 120 } },
     });
     y = (doc as any).lastAutoTable.finalY + 14;
 
-    h2("Next Steps");
+    h1("Next Steps");
     p(
       "• Visit a licensed dermatologist for clinical examination.\n• Monitor changes with periodic photos.\n• Do not start or stop treatment based solely on this AI report."
     );
 
-    h2("Disclaimer");
+    h1("Disclaimer");
     p(professionalDisclaimer);
 
-    doc.save(`dermavision_short_${savedId || id || "new"}.pdf`);
+    // Sanitize and use user's name in filename: "User_name skin report.pdf"
+    const safeName =
+      (profile?.full_name?.trim() || "User")
+        .replace(/[\\/:*?\"<>|]+/g, "")   // remove invalid filename chars
+        .replace(/\s+/g, " ")             // normalize spaces
+        .trim();
+
+    doc.save(`${safeName} skin report.pdf`);
     toast.success("PDF downloaded.");
   }
 
