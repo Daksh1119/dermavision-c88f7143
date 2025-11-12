@@ -22,7 +22,9 @@ import { toast } from "sonner";
 import { Activity, Loader2 } from "lucide-react";
 
 /**
- * Minimal profile completeness rule (must match onboarding & guards)
+ * Profile completeness rule (UPDATED):
+ * - Required: full_name, age, phone, sex
+ * - Optional: skin_type
  */
 function isProfileComplete(p: any | null): boolean {
   if (!p) return false;
@@ -30,8 +32,8 @@ function isProfileComplete(p: any | null): boolean {
   const hasAge =
     typeof p.age === "number" && !Number.isNaN(p.age) && p.age >= 1 && p.age <= 120;
   const hasPhone = !!(p.phone && p.phone.trim().length >= 6);
-  const hasSkin = !!p.skin_type;
-  return hasName && hasAge && hasPhone && hasSkin;
+  const hasSex = !!p.sex;
+  return hasName && hasAge && hasPhone && hasSex;
 }
 
 const Auth = () => {
@@ -106,7 +108,6 @@ const Auth = () => {
           .maybeSingle();
 
         if (error) {
-          // If profile table query fails, force onboarding to capture required data
           navigate(`/onboarding?redirect=${encodeURIComponent(redirectTarget)}`, { replace: true });
           return;
         }
@@ -201,23 +202,18 @@ const Auth = () => {
         email,
         password,
         options: {
-          // Send magic/confirm link to deployed domain (or env-specified), back to this /auth page
           emailRedirectTo: `${SITE_URL}/auth?redirect=${encodeURIComponent(redirectTarget)}`
         }
       });
       if (error) throw error;
 
-      // Pre-create the profile row so onboarding never starts with a missing row
       await ensureProfileRow();
 
       if (data.session) {
-        // Immediate session (e.g. email confirmation disabled)
         toast.success("Account created!");
         await routePostAuth();
       } else {
-        toast.success(
-          "Account created! Please confirm your email then return to sign in."
-        );
+        toast.success("Account created! Please confirm your email then return to sign in.");
         setActiveTab("signin");
         setPassword("");
         setConfirmPassword("");

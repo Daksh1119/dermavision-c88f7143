@@ -82,6 +82,7 @@ export default function Onboarding() {
           age: p.age ?? undefined,
           sex: p.sex ?? undefined,
           phone: p.phone ?? "",
+          // Skin type is now optional; prefill if present
           skin_type: p.skin_type ?? undefined,
           allergies: p.allergies ?? "",
           notes: p.notes ?? "",
@@ -92,19 +93,22 @@ export default function Onboarding() {
     })();
   }, [navigate, redirectTo]);
 
+  // New completeness rule: Sex is required; Skin type is optional.
   function isComplete(p: ProfileRow) {
     const hasName = !!(p.full_name && p.full_name.trim().length >= 2);
     const hasAge = typeof p.age === "number" && p.age >= 1 && p.age <= 120;
     const hasPhone = !!(p.phone && p.phone.trim().length >= 6);
-    const hasSkin = !!p.skin_type;
-    return hasName && hasAge && hasPhone && hasSkin;
+    const hasSex = !!p.sex; // required
+    return hasName && hasAge && hasPhone && hasSex;
   }
 
+  // Validation for this page: Sex required, Skin type optional
   function validate(): string | null {
     if (!form.full_name || form.full_name.trim().length < 2) return "Enter full name.";
     if (typeof form.age !== "number" || Number.isNaN(form.age) || form.age < 1 || form.age > 120) return "Enter a valid age.";
     if (!form.phone || form.phone.trim().length < 6) return "Enter a valid phone.";
-    if (!form.skin_type) return "Select skin type.";
+    if (!form.sex) return "Select sex.";
+    // Skin type intentionally not required
     return null;
   }
 
@@ -117,13 +121,12 @@ export default function Onboarding() {
     try {
       const payload: ProfileRow = {
         id: userId,
-        // FIX: persist email reliably (use session email if missing in form)
         email: form.email || userEmail || null,
         full_name: form.full_name?.trim() || null,
         age: form.age ?? null,
-        sex: form.sex ?? null,
+        sex: form.sex ?? null,                // required; validated above
         phone: form.phone?.trim() || null,
-        skin_type: form.skin_type ?? null,
+        skin_type: form.skin_type ?? null,    // optional
         allergies: form.allergies?.trim() || null,
         notes: form.notes?.trim() || null,
         avatar_url: form.avatar_url || null,
@@ -203,7 +206,7 @@ export default function Onboarding() {
 
               <div className="grid md:grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label>Skin Type *</Label>
+                  <Label>Skin Type (optional)</Label>
                   <Select
                     value={form.skin_type || ""}
                     onValueChange={(v) => setForm(f => ({ ...f, skin_type: v as SkinType }))}
@@ -220,8 +223,9 @@ export default function Onboarding() {
                     </SelectContent>
                   </Select>
                 </div>
+
                 <div className="space-y-2">
-                  <Label>Sex (optional)</Label>
+                  <Label>Sex *</Label>
                   <Select
                     value={form.sex || ""}
                     onValueChange={(v) => setForm(f => ({ ...f, sex: v as Sex }))}

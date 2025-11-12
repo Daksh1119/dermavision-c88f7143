@@ -7,20 +7,21 @@ type ProfileRow = {
   full_name?: string | null;
   age?: number | null;
   phone?: string | null;
+  sex?: "Male" | "Female" | "Other" | "Prefer not to say" | null;
   skin_type?: "normal" | "dry" | "oily" | "combination" | "sensitive" | null;
   allergies?: string | null;
   notes?: string | null;
   avatar_url?: string | null;
 };
 
+// UPDATED completeness: require sex; skin_type optional
 function isProfileComplete(p: ProfileRow | null | undefined) {
   if (!p) return false;
-  // Required fields
   const hasName = !!(p.full_name && p.full_name.trim().length >= 2);
   const hasAge = typeof p.age === "number" && p.age >= 1 && p.age <= 120;
   const hasPhone = !!(p.phone && p.phone.trim().length >= 6);
-  const hasSkin = !!p.skin_type;
-  return hasName && hasAge && hasPhone && hasSkin;
+  const hasSex = !!p.sex;
+  return hasName && hasAge && hasPhone && hasSex;
 }
 
 /**
@@ -44,7 +45,6 @@ export default function ProfileGuard({ children }: { children: React.ReactNode }
       }
       setSessionOK(true);
 
-      // Fetch profile
       const sb: any = supabase;
       const { data, error } = await sb
         .from("profiles")
@@ -53,7 +53,6 @@ export default function ProfileGuard({ children }: { children: React.ReactNode }
         .maybeSingle();
 
       if (error) {
-        // If query fails, force onboarding to be safe
         setComplete(false);
         setLoading(false);
         return;

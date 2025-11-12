@@ -64,6 +64,21 @@ const TEXT_BODY_RGB: [number, number, number] = [17, 24, 39]; // #111827
 const LINE_GRAY: Color = [226, 232, 240]; // #E2E8F0
 const ZEBRA: Color = [248, 250, 252]; // #F8FAFC
 
+// --------------------- Helpers --------------------------
+function titleCaseFromEmail(email?: string | null): string {
+  if (!email) return "User";
+  const local = email.split("@")[0] || "";
+  const tokens = local.split(/[._-]+/).filter(Boolean);
+  if (tokens.length === 0) return "User";
+  return tokens
+    .map(t => t.charAt(0).toUpperCase() + t.slice(1))
+    .join(" ");
+}
+
+function sanitizeFilename(input: string): string {
+  return input.replace(/[\\/:*?"<>|]+/g, "").replace(/\s+/g, " ").trim();
+}
+
 // --------------------- Main Component --------------------------
 const Report = () => {
   const navigate = useNavigate();
@@ -306,11 +321,41 @@ Please ensure:
   }
 
   // --------------------- PDF Generation -----------------------
-  function generatePDF() {
+  // Make this async so we can reliably fetch the latest profile name for the filename
+  async function generatePDF() {
     if (!predictions.length) {
       toast.error("Report incomplete - cannot export yet.");
       return;
     }
+
+    // Ensure we have the freshest profile name for the filename
+    let displayName = profile?.full_name?.trim();
+    try {
+      if (!displayName || displayName.length < 2) {
+        const { data: { session } } = await supabase.auth.getSession();
+        const userId = session?.user?.id;
+        const userEmail = session?.user?.email || "";
+        if (userId) {
+          const sb: any = supabase;
+          const { data } = await sb
+            .from("profiles")
+            .select("full_name")
+            .eq("id", userId)
+            .maybeSingle();
+          if (data?.full_name && data.full_name.trim().length >= 2) {
+            displayName = data.full_name.trim();
+          } else {
+            displayName = titleCaseFromEmail(userEmail);
+          }
+        }
+      }
+    } catch {
+      // fall back to email-based name or "User"
+      const { data: { user } } = await supabase.auth.getUser();
+      displayName = titleCaseFromEmail(user?.email || "");
+    }
+
+    const safeName = sanitizeFilename(displayName || "User");
 
     const doc = new jsPDF("p", "pt", "a4");
     const pageWidth = doc.internal.pageSize.getWidth();
@@ -360,7 +405,7 @@ Please ensure:
       head: [["Field", "Value"]],
       body: [
         ["Full Name", profile?.full_name || "Not provided"],
-        ["Age", profile?.age ? String(profile.age) : "Not provided"],
+        ["Age", profile?.age ? String(profile?.age) : "Not provided"],
         ["Allergies", profile?.allergies || "None reported"],
       ],
       styles: {
@@ -444,13 +489,7 @@ Please ensure:
     h1("Disclaimer");
     p(professionalDisclaimer);
 
-    // Sanitize and use user's name in filename: "User_name skin report.pdf"
-    const safeName =
-      (profile?.full_name?.trim() || "User")
-        .replace(/[\\/:*?\"<>|]+/g, "")   // remove invalid filename chars
-        .replace(/\s+/g, " ")             // normalize spaces
-        .trim();
-
+    // Use the resolved display name for the filename
     doc.save(`${safeName} skin report.pdf`);
     toast.success("PDF downloaded.");
   }
