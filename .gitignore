@@ -90,3 +90,4 @@ supabase/functions/.netlify/
 # -------------------------
 reports/*.pdf
 *.pdfml-service/
+echo backend/echo backend-python/echo ml-service/echo api/echo *.pyecho venv/echo .venv/echo __pycache__/
