@@ -42,14 +42,15 @@ type PlaceItem = {
 // Read keys from .env (frontend-safe). Ensure Places API is enabled and key is referrer-restricted.
 const GOOGLE_PLACES_KEY = import.meta.env.VITE_GOOGLE_PLACES_API_KEY as string | undefined;
 
-// Radius in meters
-const SEARCH_RADIUS = 15000; // 15 km
+// City‑wide search strategy (meters). We escalate until we get results.
+const CITY_RADIUS_STEPS = [40000, 60000, 80000, 100000]; // 40km → 60km → 80km → 100km
 
 const NearbyDermatologists = () => {
   const [loading, setLoading] = useState(true);
   const [coords, setCoords] = useState<{ lat: number; lon: number } | null>(null);
   const [places, setPlaces] = useState<PlaceItem[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [activeRadius, setActiveRadius] = useState<number>(CITY_RADIUS_STEPS[0]);
 
   const mapRef = useRef<HTMLDivElement | null>(null);
   const mapInstance = useRef<L.Map | null>(null);
@@ -84,7 +85,7 @@ const NearbyDermatologists = () => {
       const c = { lat: latitude, lon: longitude };
       setCoords(c);
       initMap(c.lat, c.lon, accuracy || 50);
-      void loadNearby(c.lat, c.lon);
+      void loadNearbyEscalating(c.lat, c.lon);
     };
 
     const geoError = () => {
@@ -195,8 +196,8 @@ const NearbyDermatologists = () => {
 
   // ----------------------------- Places fetching -----------------------------
 
-  // Google Places v1 Nearby Search (distance-ranked)
-  const fetchPlacesV1Nearby = async (lat: number, lon: number): Promise<PlaceItem[]> => {
+  // Nearby search (distance-ranked). Radius param is dynamic.
+  const fetchPlacesV1Nearby = async (lat: number, lon: number, radius: number): Promise<PlaceItem[]> => {
     if (!GOOGLE_PLACES_KEY) return [];
     try {
       const url = "https://places.googleapis.com/v1/places:searchNearby";
@@ -208,7 +209,7 @@ const NearbyDermatologists = () => {
         locationRestriction: {
           circle: {
             center: { latitude: lat, longitude: lon },
-            radius: SEARCH_RADIUS,
+            radius,
           },
         },
         languageCode: "en",
@@ -267,8 +268,8 @@ const NearbyDermatologists = () => {
     }
   };
 
-  // Google Places v1 Text Search — UPDATED to query "Nearest Dermatologists"
-  const fetchPlacesV1Text = async (lat: number, lon: number): Promise<PlaceItem[]> => {
+  // Text search — query "Nearest Dermatologists". Radius param via locationBias.
+  const fetchPlacesV1Text = async (lat: number, lon: number, radius: number): Promise<PlaceItem[]> => {
     if (!GOOGLE_PLACES_KEY) return [];
     try {
       const url = "https://places.googleapis.com/v1/places:searchText";
@@ -278,7 +279,7 @@ const NearbyDermatologists = () => {
         locationBias: {
           circle: {
             center: { latitude: lat, longitude: lon },
-            radius: SEARCH_RADIUS,
+            radius,
           },
         },
         languageCode: "en",
@@ -336,24 +337,36 @@ const NearbyDermatologists = () => {
     }
   };
 
-  async function loadNearby(lat: number, lon: number) {
+  // Escalate radius city‑wide until we find results
+  async function loadNearbyEscalating(lat: number, lon: number) {
     setLoading(true);
     setError(null);
     try {
-      // Try Nearby + Text and merge (dedupe by id/name+coords)
-      const [nearby, text] = await Promise.all([
-        fetchPlacesV1Nearby(lat, lon),
-        fetchPlacesV1Text(lat, lon),
-      ]);
-      const all = [...nearby, ...text];
-      const unique = Array.from(
-        new Map(
-          all.map((p) => [p.id || `${p.name}_${p.lat.toFixed(5)}_${p.lon.toFixed(5)}`, p])
-        ).values()
-      );
-      setPlaces(unique);
-      plotPlaces(unique);
-    } catch (e: any) {
+      let found: PlaceItem[] = [];
+      let chosen = CITY_RADIUS_STEPS[0];
+
+      for (const r of CITY_RADIUS_STEPS) {
+        const [nearby, text] = await Promise.all([
+          fetchPlacesV1Nearby(lat, lon, r),
+          fetchPlacesV1Text(lat, lon, r),
+        ]);
+        const all = [...nearby, ...text];
+        const unique = Array.from(
+          new Map(
+            all.map((p) => [p.id || `${p.name}_${p.lat.toFixed(5)}_${p.lon.toFixed(5)}`, p])
+          ).values()
+        );
+        if (unique.length > 0) {
+          found = unique;
+          chosen = r;
+          break;
+        }
+      }
+
+      setActiveRadius(chosen);
+      setPlaces(found);
+      plotPlaces(found);
+    } catch {
       setError("Failed to fetch nearby clinics");
     } finally {
       setLoading(false);
@@ -396,10 +409,12 @@ const NearbyDermatologists = () => {
     }
   }
 
+  const km = (activeRadius / 1000).toFixed(0);
+
   const openLargerMapHref = coords
     ? `https://www.google.com/maps/search/${encodeURIComponent(
         "Nearest Dermatologists"
-      )}/@${coords.lat},${coords.lon},14z`
+      )}/@${coords.lat},${coords.lon},12z`
     : `https://www.google.com/maps/search/${encodeURIComponent("Nearest Dermatologists")}`;
 
   // ----------------------------- Render -----------------------------
@@ -433,10 +448,15 @@ const NearbyDermatologists = () => {
 
           <div ref={mapRef} className="h-[520px] w-full" />
 
-          {/* Current location chip overlay for quick reference */}
+          {/* Overlays */}
           {coords && (
-            <div className="absolute right-2 top-2 z-[1000] bg-white/90 border rounded px-2 py-1 text-xs shadow">
-              You: {coords.lat.toFixed(4)}, {coords.lon.toFixed(4)}
+            <div className="absolute right-2 top-2 z-[1000] flex flex-col gap-1 items-end">
+              <div className="bg-white/90 border rounded px-2 py-1 text-xs shadow">
+                You: {coords.lat.toFixed(4)}, {coords.lon.toFixed(4)}
+              </div>
+              <div className="bg-white/90 border rounded px-2 py-1 text-xs shadow">
+                Radius: ~{km} km
+              </div>
             </div>
           )}
         </div>
@@ -446,15 +466,17 @@ const NearbyDermatologists = () => {
           {loading ? (
             <div className="flex items-center gap-2 text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
-              Loading nearby clinics…
+              Searching city‑wide for dermatologists…
             </div>
           ) : error ? (
             <div className="text-destructive text-sm">{error}</div>
           ) : places.length === 0 ? (
-            <div className="text-sm text-muted-foreground">No clinics found in the selected radius.</div>
+            <div className="text-sm text-muted-foreground">
+              No clinics found even after city‑wide search. Try zooming out or moving the map.
+            </div>
           ) : (
             <div className="text-sm text-muted-foreground">
-              Showing {places.length} locations. Your current location marker remains visible.
+              Showing {places.length} locations within about {km} km. Your current location marker remains visible.
             </div>
           )}
         </div>
