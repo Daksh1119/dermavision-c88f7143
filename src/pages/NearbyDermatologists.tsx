@@ -39,10 +39,8 @@ type PlaceItem = {
   userRatingCount?: number;
 };
 
-// Read keys from .env (frontend-safe). Ensure Places + Maps Embed APIs are enabled and key is referrer-restricted.
+// Read keys from .env (frontend-safe). Ensure Places API is enabled and key is referrer-restricted.
 const GOOGLE_PLACES_KEY = import.meta.env.VITE_GOOGLE_PLACES_API_KEY as string | undefined;
-const GOOGLE_EMBED_KEY =
-  (import.meta.env.VITE_GOOGLE_MAPS_EMBED_API_KEY as string | undefined) || GOOGLE_PLACES_KEY;
 
 // Radius in meters
 const SEARCH_RADIUS = 15000; // 15 km
@@ -86,7 +84,6 @@ const NearbyDermatologists = () => {
       const c = { lat: latitude, lon: longitude };
       setCoords(c);
       initMap(c.lat, c.lon, accuracy || 50);
-      // load clinics once we have position
       void loadNearby(c.lat, c.lon);
     };
 
@@ -102,7 +99,7 @@ const NearbyDermatologists = () => {
       timeout: 12_000,
     });
 
-    // Watch for movement to keep the blue accuracy circle and pin reasonably fresh (optional)
+    // Keep the user's location marker visible/fresh
     const watchId = navigator.geolocation.watchPosition(
       (pos) => {
         const { latitude, longitude, accuracy } = pos.coords;
@@ -126,7 +123,6 @@ const NearbyDermatologists = () => {
   function initMap(lat: number, lon: number, accuracy: number) {
     if (!mapRef.current) return;
 
-    // Create map if needed
     if (!mapInstance.current) {
       mapInstance.current = L.map(mapRef.current, {
         center: [lat, lon],
@@ -140,7 +136,7 @@ const NearbyDermatologists = () => {
           '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
       }).addTo(mapInstance.current);
 
-      // A simple recenter control to keep user location always accessible
+      // Recenter control
       const Recenter = L.Control.extend({
         onAdd: () => {
           const btn = L.DomUtil.create("button", "leaflet-bar");
@@ -374,6 +370,11 @@ const NearbyDermatologists = () => {
       placeLayerRef.current = L.layerGroup().addTo(mapInstance.current);
     }
 
+    // Bounds should always include the user's location so their pin is visible
+    const bounds = L.latLngBounds([]);
+
+    if (coords) bounds.extend([coords.lat, coords.lon]);
+
     items.forEach((p) => {
       const m = L.marker([p.lat, p.lon]);
       const rating = typeof p.rating === "number" ? `⭐ ${p.rating} (${p.userRatingCount || 0})` : "";
@@ -383,19 +384,17 @@ const NearbyDermatologists = () => {
         : "";
       m.bindPopup(`<b>${p.name}</b><br/>${p.address}${phone}<br/>${rating}${mapsLink}`);
       m.addTo(placeLayerRef.current!);
+
+      bounds.extend([p.lat, p.lon]);
     });
+
+    if (!bounds.isValid()) {
+      // No places yet; keep user in view
+      if (coords) mapInstance.current.setView([coords.lat, coords.lon], 14);
+    } else {
+      mapInstance.current.fitBounds(bounds, { padding: [30, 30], maxZoom: 15 });
+    }
   }
-
-  // ----------------------------- UI helpers -----------------------------
-
-  const embedSrc =
-    GOOGLE_EMBED_KEY && coords
-      ? `https://www.google.com/maps/embed/v1/search?key=${encodeURIComponent(
-          GOOGLE_EMBED_KEY
-        )}&q=${encodeURIComponent(
-          `Nearest Dermatologists near ${coords.lat},${coords.lon}`
-        )}&center=${coords.lat},${coords.lon}&zoom=13`
-      : "";
 
   const openLargerMapHref = coords
     ? `https://www.google.com/maps/search/${encodeURIComponent(
@@ -418,7 +417,7 @@ const NearbyDermatologists = () => {
           </p>
         </div>
 
-        {/* Leaflet map with user's location ALWAYS visible */}
+        {/* Single Leaflet map with user's location ALWAYS visible and clinic markers */}
         <div className="relative rounded-xl overflow-hidden border bg-card">
           {/* View larger map link anchored to Google with the updated query */}
           {coords && (
@@ -432,7 +431,7 @@ const NearbyDermatologists = () => {
             </a>
           )}
 
-          <div ref={mapRef} className="h-[420px] w-full" />
+          <div ref={mapRef} className="h-[520px] w-full" />
 
           {/* Current location chip overlay for quick reference */}
           {coords && (
@@ -441,24 +440,6 @@ const NearbyDermatologists = () => {
             </div>
           )}
         </div>
-
-        {/* Optional Google embed beneath for familiar UX search list; query updated to "Nearest Dermatologists" */}
-        {GOOGLE_EMBED_KEY && coords && (
-          <div className="mt-6 rounded-xl overflow-hidden border">
-            <iframe
-              title="Nearest Dermatologists (Google)"
-              width="100%"
-              height="420"
-              loading="lazy"
-              allowFullScreen
-              referrerPolicy="no-referrer-when-downgrade"
-              src={embedSrc}
-            />
-            <p className="text-center text-xs text-muted-foreground py-3">
-              Showing Google results near your location. Use the map to explore.
-            </p>
-          </div>
-        )}
 
         {/* Status */}
         <div className="mt-6">
