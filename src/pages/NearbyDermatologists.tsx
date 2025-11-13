@@ -10,7 +10,7 @@ import markerIcon2x from "leaflet/dist/images/marker-icon-2x.png";
 import markerIcon from "leaflet/dist/images/marker-icon.png";
 import markerShadow from "leaflet/dist/images/marker-shadow.png";
 
-// Custom pin for the USER location
+// Your custom Google-style pin for the USER location (add a PNG to this path)
 import userPin from "@/assets/google-pin.png";
 
 function setupLeafletIcons() {
@@ -39,24 +39,21 @@ type PlaceItem = {
   userRatingCount?: number;
 };
 
-// Read keys from .env (frontend-safe). Ensure Places API is enabled and key is referrer-restricted.
+// Read keys from .env (frontend-safe). Ensure Places + Maps Embed APIs are enabled and key is referrer-restricted.
 const GOOGLE_PLACES_KEY = import.meta.env.VITE_GOOGLE_PLACES_API_KEY as string | undefined;
+const GOOGLE_EMBED_KEY =
+  (import.meta.env.VITE_GOOGLE_MAPS_EMBED_API_KEY as string | undefined) || GOOGLE_PLACES_KEY;
 
-// City‑wide search strategy (meters). We escalate until we get results.
-const CITY_RADIUS_STEPS = [40000, 60000, 80000, 100000]; // 40km → 60km → 80km → 100km
+// Radius in meters
+const SEARCH_RADIUS = 15000; // 15 km
 
 const NearbyDermatologists = () => {
   const [loading, setLoading] = useState(true);
   const [coords, setCoords] = useState<{ lat: number; lon: number } | null>(null);
-  const [places, setPlaces] = useState<PlaceItem[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [activeRadius, setActiveRadius] = useState<number>(CITY_RADIUS_STEPS[0]);
+  const [useEmbedFallback, setUseEmbedFallback] = useState(false);
 
   const mapRef = useRef<HTMLDivElement | null>(null);
   const mapInstance = useRef<L.Map | null>(null);
-  const userMarkerRef = useRef<L.Marker | null>(null);
-  const accuracyCircleRef = useRef<L.Circle | null>(null);
-  const placeLayerRef = useRef<L.LayerGroup | null>(null);
 
   // Custom icon for the user’s current location (Google-style pin)
   const userIcon = L.icon({
@@ -75,22 +72,18 @@ const NearbyDermatologists = () => {
 
     if (!navigator.geolocation) {
       toast.error("Geolocation not supported by this browser.");
-      setError("Geolocation not supported by this browser.");
       setLoading(false);
       return;
     }
 
     const geoSuccess = (pos: GeolocationPosition) => {
-      const { latitude, longitude, accuracy } = pos.coords;
-      const c = { lat: latitude, lon: longitude };
-      setCoords(c);
-      initMap(c.lat, c.lon, accuracy || 50);
-      void loadNearbyEscalating(c.lat, c.lon);
+      const { latitude, longitude } = pos.coords;
+      setCoords({ lat: latitude, lon: longitude });
+      initMap(latitude, longitude);
     };
 
     const geoError = () => {
       toast.error("Location access denied or unavailable.");
-      setError("Location access denied or unavailable.");
       setLoading(false);
     };
 
@@ -100,116 +93,76 @@ const NearbyDermatologists = () => {
       timeout: 12_000,
     });
 
-    // Keep the user's location marker visible/fresh
-    const watchId = navigator.geolocation.watchPosition(
-      (pos) => {
-        const { latitude, longitude, accuracy } = pos.coords;
-        setCoords({ lat: latitude, lon: longitude });
-        updateUserMarker(latitude, longitude, accuracy || 50);
-      },
-      () => {},
-      { enableHighAccuracy: true, maximumAge: 60_000, timeout: 12_000 }
-    );
-
     return () => {
       if (mapInstance.current) {
         mapInstance.current.remove();
         mapInstance.current = null;
       }
-      if (watchId) navigator.geolocation.clearWatch(watchId);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function initMap(lat: number, lon: number, accuracy: number) {
-    if (!mapRef.current) return;
-
-    if (!mapInstance.current) {
-      mapInstance.current = L.map(mapRef.current, {
-        center: [lat, lon],
-        zoom: 13,
-        zoomControl: true,
-      });
-
-      // OSM tiles
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        attribution:
-          '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-      }).addTo(mapInstance.current);
-
-      // Recenter control
-      const Recenter = L.Control.extend({
-        onAdd: () => {
-          const btn = L.DomUtil.create("button", "leaflet-bar");
-          btn.style.width = "34px";
-          btn.style.height = "34px";
-          btn.style.cursor = "pointer";
-          btn.title = "Recenter on my location";
-          btn.innerHTML = "⌖";
-          btn.onclick = () => {
-            if (coords && mapInstance.current) {
-              mapInstance.current.setView([coords.lat, coords.lon], 14);
-              if (userMarkerRef.current) userMarkerRef.current.openPopup();
-            }
-          };
-          return btn;
-        },
-        onRemove: () => {},
-      });
-      new Recenter({ position: "topleft" }).addTo(mapInstance.current);
-
-      // Layer for clinic pins
-      placeLayerRef.current = L.layerGroup().addTo(mapInstance.current);
-    }
-
-    // Add/Update user marker and accuracy circle
-    updateUserMarker(lat, lon, accuracy);
-  }
-
-  function updateUserMarker(lat: number, lon: number, accuracy: number) {
+  const addMarkers = (places: PlaceItem[]) => {
     if (!mapInstance.current) return;
 
-    const pos = L.latLng(lat, lon);
-
-    // Create or move the user marker
-    if (!userMarkerRef.current) {
-      userMarkerRef.current = L.marker(pos, { icon: userIcon, zIndexOffset: 1000 })
-        .addTo(mapInstance.current)
-        .bindPopup(`<b>You are here</b><br/>Lat: ${lat.toFixed(4)}, Lng: ${lon.toFixed(4)}`, { closeButton: true });
-    } else {
-      userMarkerRef.current.setLatLng(pos);
+    // Clear previous markers
+    const existing = (mapInstance.current as any).__dermMarkers;
+    if (existing) {
+      existing.forEach((m: L.Marker) => mapInstance.current!.removeLayer(m));
     }
 
-    // Accuracy circle
-    if (!accuracyCircleRef.current) {
-      accuracyCircleRef.current = L.circle(pos, {
-        radius: Math.max(accuracy, 25),
-        color: "#0ea5e9",
-        fillColor: "#0ea5e9",
-        fillOpacity: 0.15,
-        weight: 1,
-      }).addTo(mapInstance.current);
-    } else {
-      accuracyCircleRef.current.setLatLng(pos).setRadius(Math.max(accuracy, 25));
+    const markers: L.Marker[] = [];
+    places.forEach((p) => {
+      const m = L.marker([p.lat, p.lon]).addTo(mapInstance.current!);
+      const srcTag = p.source === "google" ? "Google" : "OSM";
+      const phone = p.phone ? `<br/>📞 ${p.phone}` : "";
+      m.bindPopup(
+        `<strong>${p.name}</strong><br/>${p.address}${phone}<br/><em>Source: ${srcTag}</em>`
+      );
+      markers.push(m);
+    });
+
+    (mapInstance.current as any).__dermMarkers = markers;
+  };
+
+  // Haversine (meters) for possible dedupe
+  const distM = (a: { lat: number; lon: number }, b: { lat: number; lon: number }) => {
+    const R = 6371000;
+    const dLat = ((b.lat - a.lat) * Math.PI) / 180;
+    const dLon = ((b.lon - a.lon) * Math.PI) / 180;
+    const lat1 = (a.lat * Math.PI) / 180;
+    const lat2 = (b.lat * Math.PI) / 180;
+    const sinDLat = Math.sin(dLat / 2);
+    const sinDLon = Math.sin(dLon / 2);
+    const c = sinDLat * sinDLat + Math.cos(lat1) * Math.cos(lat2) * sinDLon * sinDLon;
+    return 2 * R * Math.asin(Math.sqrt(c));
+  };
+
+  const dedupePlaces = (items: PlaceItem[]) => {
+    const out: PlaceItem[] = [];
+    for (const p of items) {
+      const nameKey = p.name.trim().toLowerCase();
+      const dup = out.find(
+        (q) => q.name.trim().toLowerCase() === nameKey && distM(p, q) < 80
+      );
+      if (!dup) out.push(p);
     }
-  }
+    return out;
+  };
 
-  // ----------------------------- Places fetching -----------------------------
-
-  // Nearby search (distance-ranked). Radius param is dynamic.
-  const fetchPlacesV1Nearby = async (lat: number, lon: number, radius: number): Promise<PlaceItem[]> => {
+  // Google Places v1 Nearby Search (with phone + maps URL via FieldMask)
+  const fetchPlacesV1Nearby = async (lat: number, lon: number): Promise<PlaceItem[]> => {
     if (!GOOGLE_PLACES_KEY) return [];
     try {
       const url = "https://places.googleapis.com/v1/places:searchNearby";
       const body = {
-        // 'dermatologist' is not a standalone primary type in v1; use doctor/medical and then filter names
-        includedTypes: ["doctor", "medical_clinic"],
+        includedTypes: ["doctor"],
         maxResultCount: 20,
         rankPreference: "DISTANCE",
         locationRestriction: {
           circle: {
             center: { latitude: lat, longitude: lon },
-            radius,
+            radius: SEARCH_RADIUS,
           },
         },
         languageCode: "en",
@@ -219,17 +172,18 @@ const NearbyDermatologists = () => {
         method: "POST",
         headers: {
           "X-Goog-Api-Key": GOOGLE_PLACES_KEY,
-          "X-Goog-FieldMask": [
-            "places.id",
-            "places.displayName",
-            "places.location",
-            "places.formattedAddress",
-            "places.nationalPhoneNumber",
-            "places.internationalPhoneNumber",
-            "places.googleMapsUri",
-            "places.rating",
-            "places.userRatingCount",
-          ].join(","),
+          "X-Goog-FieldMask":
+            [
+              "places.id",
+              "places.displayName",
+              "places.location",
+              "places.formattedAddress",
+              "places.nationalPhoneNumber",
+              "places.internationalPhoneNumber",
+              "places.googleMapsUri",
+              "places.rating",
+              "places.userRatingCount",
+            ].join(","),
           "Content-Type": "application/json",
         },
         body: JSON.stringify(body),
@@ -260,7 +214,6 @@ const NearbyDermatologists = () => {
         })
         .filter(Boolean) as PlaceItem[];
 
-      // Prefer obvious dermatology hits
       const dermPreferred = places.filter((p) => /derm|skin/i.test(p.name));
       return dermPreferred.length ? dermPreferred : places;
     } catch {
@@ -268,18 +221,18 @@ const NearbyDermatologists = () => {
     }
   };
 
-  // Text search — query "Nearest Dermatologists". Radius param via locationBias.
-  const fetchPlacesV1Text = async (lat: number, lon: number, radius: number): Promise<PlaceItem[]> => {
+  // Google Places v1 Text Search
+  const fetchPlacesV1Text = async (lat: number, lon: number): Promise<PlaceItem[]> => {
     if (!GOOGLE_PLACES_KEY) return [];
     try {
       const url = "https://places.googleapis.com/v1/places:searchText";
       const body = {
-        textQuery: "Nearest Dermatologists",
+        textQuery: "dermatologist",
         maxResultCount: 20,
         locationBias: {
           circle: {
             center: { latitude: lat, longitude: lon },
-            radius,
+            radius: SEARCH_RADIUS,
           },
         },
         languageCode: "en",
@@ -289,17 +242,18 @@ const NearbyDermatologists = () => {
         method: "POST",
         headers: {
           "X-Goog-Api-Key": GOOGLE_PLACES_KEY,
-          "X-Goog-FieldMask": [
-            "places.id",
-            "places.displayName",
-            "places.location",
-            "places.formattedAddress",
-            "places.nationalPhoneNumber",
-            "places.internationalPhoneNumber",
-            "places.googleMapsUri",
-            "places.rating",
-            "places.userRatingCount",
-          ].join(","),
+          "X-Goog-FieldMask":
+            [
+              "places.id",
+              "places.displayName",
+              "places.location",
+              "places.formattedAddress",
+              "places.nationalPhoneNumber",
+              "places.internationalPhoneNumber",
+              "places.googleMapsUri",
+              "places.rating",
+              "places.userRatingCount",
+            ].join(","),
           "Content-Type": "application/json",
         },
         body: JSON.stringify(body),
@@ -311,7 +265,7 @@ const NearbyDermatologists = () => {
       const places = (data.places ?? [])
         .map((pl: any): PlaceItem | null => {
           const loc = pl.location;
-          const nm = pl.displayName?.text || "Clinic";
+          const nm = pl.displayName?.text || "Dermatology";
           if (!loc?.latitude || !loc?.longitude) return null;
           const phone: string | undefined =
             pl.nationalPhoneNumber || pl.internationalPhoneNumber || undefined;
@@ -330,156 +284,232 @@ const NearbyDermatologists = () => {
         })
         .filter(Boolean) as PlaceItem[];
 
-      const dermPreferred = places.filter((p) => /derm|skin/i.test(p.name));
-      return dermPreferred.length ? dermPreferred : places;
+      return places;
     } catch {
       return [];
     }
   };
 
-  // Escalate radius city‑wide until we find results
-  async function loadNearbyEscalating(lat: number, lon: number) {
-    setLoading(true);
-    setError(null);
+  // Legacy Nearby Search (no phone unless you call details per result; we skip for perf)
+  const fetchPlacesLegacy = async (lat: number, lon: number): Promise<PlaceItem[]> => {
+    if (!GOOGLE_PLACES_KEY) return [];
     try {
-      let found: PlaceItem[] = [];
-      let chosen = CITY_RADIUS_STEPS[0];
+      const url =
+        `https://maps.googleapis.com/maps/api/place/nearbysearch/json` +
+        `?location=${lat},${lon}` +
+        `&radius=${SEARCH_RADIUS}` +
+        `&type=doctor` +
+        `&keyword=dermatologist` +
+        `&key=${GOOGLE_PLACES_KEY}`;
 
-      for (const r of CITY_RADIUS_STEPS) {
-        const [nearby, text] = await Promise.all([
-          fetchPlacesV1Nearby(lat, lon, r),
-          fetchPlacesV1Text(lat, lon, r),
-        ]);
-        const all = [...nearby, ...text];
-        const unique = Array.from(
-          new Map(
-            all.map((p) => [p.id || `${p.name}_${p.lat.toFixed(5)}_${p.lon.toFixed(5)}`, p])
-          ).values()
-        );
-        if (unique.length > 0) {
-          found = unique;
-          chosen = r;
-          break;
-        }
+      const res = await fetch(url);
+      if (!res.ok) return [];
+      const data = await res.json();
+
+      const places = (data.results ?? [])
+        .map((r: any): PlaceItem | null => {
+          const loc = r.geometry?.location;
+          const nm = r.name || "Dermatology clinic";
+          if (!loc?.lat || !loc?.lng) return null;
+          return {
+            id: r.place_id || `${loc.lat}_${loc.lng}_${nm}`,
+            name: nm,
+            lat: loc.lat,
+            lon: loc.lng,
+            address: r.vicinity || r.formatted_address || "Address not available",
+            source: "google",
+            mapsUrl: r.place_id
+              ? `https://www.google.com/maps/search/?api=1&query_place_id=${r.place_id}`
+              : `https://www.google.com/maps/search/?api=1&query=${loc.lat},${loc.lng}`,
+            rating: typeof r.rating === "number" ? r.rating : undefined,
+            userRatingCount: typeof r.user_ratings_total === "number" ? r.user_ratings_total : undefined,
+          };
+        })
+        .filter(Boolean) as PlaceItem[];
+
+      return places;
+    } catch {
+      return [];
+    }
+  };
+
+  // Overpass fallback (OSM)
+  const fetchOverpass = async (lat: number, lon: number): Promise<PlaceItem[]> => {
+    const query = `
+[out:json][timeout:25];
+(
+  node(around:${SEARCH_RADIUS},${lat},${lon})["healthcare"="dermatologist"];
+  node(around:${SEARCH_RADIUS},${lat},${lon})["healthcare"="clinic"]["medical_specialty"="dermatology"];
+  node(around:${SEARCH_RADIUS},${lat},${lon})["amenity"="doctors"]["specialty"="dermatology"];
+  node(around:${SEARCH_RADIUS},${lat},${lon})[name~"dermat|skin|derm",i];
+  way(around:${SEARCH_RADIUS},${lat},${lon})[name~"dermat|skin|derm",i];
+  relation(around:${SEARCH_RADIUS},${lat},${lon})[name~"dermat|skin|derm",i];
+);
+out center;`.trim();
+
+    try {
+      const res = await fetch(
+        `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`
+      );
+      if (!res.ok) return [];
+
+      const data = await res.json();
+      const elements = data?.elements ?? [];
+
+      const places = elements
+        .map((el: any) => {
+          const plat = el.lat ?? el.center?.lat ?? el.bounds?.minlat;
+          const plon = el.lon ?? el.center?.lon ?? el.bounds?.minlon;
+          if (!plat || !plon) return null;
+
+          const addr =
+            el.tags?.["addr:full"] ||
+            [el.tags?.["addr:housenumber"], el.tags?.["addr:street"], el.tags?.["addr:city"]]
+              .filter(Boolean)
+              .join(" ") ||
+            "Address not available";
+
+          return {
+            id: String(el.id),
+            name: el.tags?.name || "Unnamed Clinic",
+            lat: plat,
+            lon: plon,
+            address: addr,
+            source: "osm",
+            mapsUrl: `https://www.google.com/maps/search/?api=1&query=${plat},${plon}`,
+          } as PlaceItem;
+        })
+        .filter(Boolean) as PlaceItem[];
+
+      return places;
+    } catch {
+      return [];
+    }
+  };
+
+  const initMap = async (lat: number, lon: number) => {
+    try {
+      if (!mapRef.current) {
+        setLoading(false);
+        return;
       }
 
-      setActiveRadius(chosen);
-      setPlaces(found);
-      plotPlaces(found);
-    } catch {
-      setError("Failed to fetch nearby clinics");
-    } finally {
+      if (!mapInstance.current) {
+        // Create map
+        mapInstance.current = L.map(mapRef.current, {
+          attributionControl: true,
+          zoomControl: true,
+        }).setView([lat, lon], 13);
+
+        // Remove Leaflet prefix; keep OSM attribution (required)
+        mapInstance.current.attributionControl?.setPrefix?.("");
+
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          attribution: "© OpenStreetMap contributors",
+        }).addTo(mapInstance.current);
+      } else {
+        mapInstance.current.setView([lat, lon], 13);
+      }
+
+      // Add user marker with Google-style pin
+      const userMarker = L.marker([lat, lon], { icon: userIcon });
+      userMarker.bindPopup("You are here").openPopup();
+      userMarker.addTo(mapInstance.current);
+
+      let places: PlaceItem[] = [];
+
+      if (GOOGLE_PLACES_KEY) {
+        const p1 = await fetchPlacesV1Nearby(lat, lon);
+        places.push(...p1);
+      }
+      if (places.length < 10 && GOOGLE_PLACES_KEY) {
+        const p2 = await fetchPlacesV1Text(lat, lon);
+        places.push(...p2);
+      }
+      if (places.length < 10 && GOOGLE_PLACES_KEY) {
+        const p3 = await fetchPlacesLegacy(lat, lon);
+        places.push(...p3);
+      }
+      if (places.length < 8) {
+        const p4 = await fetchOverpass(lat, lon);
+        places.push(...p4);
+      }
+
+      let deduped = dedupePlaces(places);
+      const dermFirst = deduped
+        .filter((p) => /derm|skin/i.test(p.name))
+        .concat(deduped.filter((p) => !/derm|skin/i.test(p.name)));
+      deduped = dermFirst;
+
+      // Even if empty, we can still show Embed map as a UX fallback
+      if (!deduped.length) {
+        if (GOOGLE_EMBED_KEY) {
+          setUseEmbedFallback(true);
+        } else {
+          setUseEmbedFallback(false);
+        }
+        setLoading(false);
+        return;
+      }
+
+      setUseEmbedFallback(false);
+      addMarkers(deduped);
+      setLoading(false);
+    } catch (err) {
+      console.error("Error initializing map:", err);
+      if (GOOGLE_EMBED_KEY && coords) setUseEmbedFallback(true);
       setLoading(false);
     }
-  }
+  };
 
-  function plotPlaces(items: PlaceItem[]) {
-    if (!mapInstance.current) return;
-
-    // Clear previous pins (keep user marker)
-    if (placeLayerRef.current) {
-      placeLayerRef.current.clearLayers();
-    } else {
-      placeLayerRef.current = L.layerGroup().addTo(mapInstance.current);
-    }
-
-    // Bounds should always include the user's location so their pin is visible
-    const bounds = L.latLngBounds([]);
-
-    if (coords) bounds.extend([coords.lat, coords.lon]);
-
-    items.forEach((p) => {
-      const m = L.marker([p.lat, p.lon]);
-      const rating = typeof p.rating === "number" ? `⭐ ${p.rating} (${p.userRatingCount || 0})` : "";
-      const phone = p.phone ? `<br/>📞 ${p.phone}` : "";
-      const mapsLink = p.mapsUrl
-        ? `<br/><a href="${p.mapsUrl}" target="_blank" rel="noopener">Open in Google Maps</a>`
-        : "";
-      m.bindPopup(`<b>${p.name}</b><br/>${p.address}${phone}<br/>${rating}${mapsLink}`);
-      m.addTo(placeLayerRef.current!);
-
-      bounds.extend([p.lat, p.lon]);
-    });
-
-    if (!bounds.isValid()) {
-      // No places yet; keep user in view
-      if (coords) mapInstance.current.setView([coords.lat, coords.lon], 14);
-    } else {
-      mapInstance.current.fitBounds(bounds, { padding: [30, 30], maxZoom: 15 });
-    }
-  }
-
-  const km = (activeRadius / 1000).toFixed(0);
-
-  const openLargerMapHref = coords
-    ? `https://www.google.com/maps/search/${encodeURIComponent(
-        "Nearest Dermatologists"
-      )}/@${coords.lat},${coords.lon},12z`
-    : `https://www.google.com/maps/search/${encodeURIComponent("Nearest Dermatologists")}`;
-
-  // ----------------------------- Render -----------------------------
+  const embedSrc =
+    useEmbedFallback && coords && GOOGLE_EMBED_KEY
+      ? `https://www.google.com/maps/embed/v1/search?key=${encodeURIComponent(
+          GOOGLE_EMBED_KEY
+        )}&q=${encodeURIComponent("dermatologist")}&center=${coords.lat},${coords.lon}&zoom=14`
+      : null;
 
   return (
     <AppLayout>
-      <div className="medical-container py-8 max-w-6xl">
-        <div className="mb-5">
-          <h1 className="text-2xl md:text-3xl font-bold flex items-center gap-2">
-            <MapPin className="h-6 w-6 text-primary" />
-            Nearby Dermatologists
-          </h1>
-          <p className="text-muted-foreground">
-            Find dermatologists and skin care clinics near your current location.
-          </p>
-        </div>
+      <div className="py-10 max-w-6xl mx-auto px-4 space-y-6">
+        <h1 className="text-3xl font-bold flex items-center gap-2">
+          <MapPin className="text-primary" /> Nearby Dermatologists
+        </h1>
+        <p className="text-muted-foreground">
+          Find dermatologists and skin care clinics near your current location.
+        </p>
 
-        {/* Single Leaflet map with user's location ALWAYS visible and clinic markers */}
-        <div className="relative rounded-xl overflow-hidden border bg-card">
-          {/* View larger map link anchored to Google with the updated query */}
-          {coords && (
-            <a
-              href={openLargerMapHref}
-              target="_blank"
-              rel="noopener"
-              className="absolute left-2 top-2 z-[1000] text-xs bg-white/90 hover:bg-white border rounded px-2 py-1 shadow"
-            >
-              view larger map
-            </a>
-          )}
+        {/* Map (Leaflet or Embed fallback) */}
+        {useEmbedFallback && embedSrc ? (
+          <div className="w-full rounded-lg border shadow-sm overflow-hidden">
+            <iframe
+              title="Dermatologists near me"
+              src={embedSrc}
+              width="100%"
+              height="420"
+              loading="lazy"
+              referrerPolicy="no-referrer-when-downgrade"
+              style={{ border: 0, display: "block" }}
+              allowFullScreen
+            />
+          </div>
+        ) : (
+          <div ref={mapRef} className="w-full h-[420px] rounded-lg border shadow-sm overflow-hidden" />
+        )}
 
-          <div ref={mapRef} className="h-[520px] w-full" />
+        {/* Loading state */}
+        {loading && (
+          <div className="flex justify-center items-center h-40">
+            <Loader2 className="animate-spin h-8 w-8 text-primary" />
+          </div>
+        )}
 
-          {/* Overlays */}
-          {coords && (
-            <div className="absolute right-2 top-2 z-[1000] flex flex-col gap-1 items-end">
-              <div className="bg-white/90 border rounded px-2 py-1 text-xs shadow">
-                You: {coords.lat.toFixed(4)}, {coords.lon.toFixed(4)}
-              </div>
-              <div className="bg-white/90 border rounded px-2 py-1 text-xs shadow">
-                Radius: ~{km} km
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Status */}
-        <div className="mt-6">
-          {loading ? (
-            <div className="flex items-center gap-2 text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Searching city‑wide for dermatologists…
-            </div>
-          ) : error ? (
-            <div className="text-destructive text-sm">{error}</div>
-          ) : places.length === 0 ? (
-            <div className="text-sm text-muted-foreground">
-              No clinics found even after city‑wide search. Try zooming out or moving the map.
-            </div>
-          ) : (
-            <div className="text-sm text-muted-foreground">
-              Showing {places.length} locations within about {km} km. Your current location marker remains visible.
-            </div>
-          )}
-        </div>
+        {/* Clean page: no "Nearby Clinics" container/list below the map */}
+        {!loading && useEmbedFallback && (
+          <div className="text-center text-muted-foreground">
+            Showing Google results near your location. Use the map to explore.
+          </div>
+        )}
       </div>
     </AppLayout>
   );
